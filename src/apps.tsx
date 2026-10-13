@@ -1,0 +1,75 @@
+import { useEffect, useState } from 'react';
+import { AppWindow, ArrowDown, ArrowLeft, ArrowUp, ArrowUpRight, Check, ChevronRight, FolderPlus, Globe2, GripVertical, ImagePlus, LoaderCircle, Plus, Search, Trash2, X, Pencil, Folder, Layers3, Minus } from 'lucide-react';
+import { findItem, removeItem, type DockItem, type Glyph } from '../shared/model';
+import { useStore } from './store';
+import { api } from './api';
+import { Card, IconTile, PageHeader, glyphMap } from './components';
+
+const colors = ['#a799df', '#649aca', '#51b7d6', '#8dbb91', '#eab04d', '#e89bab', '#465267', '#c389bd'];
+export function AppsPage({ groupId, editId, autoScan = false }: { groupId?: string; editId?: string; autoScan?: boolean } = {}) {
+  const { state, items: saveItems, run, setState, toast } = useStore();
+  const [selectedGroup, setSelectedGroup] = useState<string | undefined>(groupId || (editId ? state.config.items.find(item => item.children?.some(child => child.id === editId))?.id : undefined));
+  const [search, setSearch] = useState('');
+  const [editing, setEditing] = useState<DockItem | undefined>(editId ? findItem(state.config.items, editId) : undefined);
+  const [creating, setCreating] = useState(false);
+  const [installed, setInstalled] = useState<DockItem[]>();
+  const [scanning, setScanning] = useState(false);
+  const [installedSearch, setInstalledSearch] = useState('');
+  const [dragOver, setDragOver] = useState(false);
+  const [remove, setRemove] = useState<DockItem>();
+  const groups = state.config.items.filter(i => i.kind === 'group');
+  const group = groups.find(i => i.id === selectedGroup);
+  const currentItems = group?.children || state.config.items;
+  const visibleItems = currentItems.filter(i => i.name.toLowerCase().includes(search.toLowerCase()));
+  const allTargets = new Set(state.config.items.flatMap(item => [item.target, ...(item.children?.map(child => child.target) || [])]).filter(Boolean));
+  const saveCurrent = async (items: DockItem[]) => {
+    await saveItems(group ? state.config.items.map(g => g.id === group.id ? { ...g, children: items } : g) : items);
+  };
+  const add = async (item: DockItem) => { await saveCurrent([...currentItems, item]); };
+  const startCreate = (kind: DockItem['kind']) => {
+    setCreating(true); setEditing({ id: crypto.randomUUID(), name: '', kind, target: '', glyph: kind === 'group' || kind === 'folder' ? 'folder' : kind === 'url' ? 'globe' : 'box', color: '#a799df', ...(kind === 'group' ? { children: [] } : {}) });
+  };
+  const reorder = (id: string, destination: number) => { const list = [...currentItems]; const from = list.findIndex(i => i.id === id); if (from < 0 || destination < 0 || destination >= list.length) return; const [item] = list.splice(from, 1); list.splice(destination, 0, item); void saveCurrent(list); };
+  const move = (id: string, destination: string) => {
+    const item = currentItems.find(i => i.id === id); if (!item || item.kind === 'group') return;
+    const next = removeItem(state.config.items, id);
+    if (destination === 'root') next.push(item); else { const target = next.find(i => i.id === destination); if (target?.kind === 'group') target.children = [...target.children || [], item]; }
+    void saveItems(next);
+  };
+  const scan = async (refresh = false) => { setInstalled([]); setScanning(true); await run(async () => setInstalled(await api.scanApps(refresh))); setScanning(false); };
+  useEffect(() => { if (autoScan && !state.preview) void scan(); }, []);
+  const pick = async (folder = false) => { await run(async () => { const item = await api.pickApp(folder); if (item) { setCreating(true); setEditing(item); } }); };
+  return <><PageHeader eyebrow="应用库" title="应用与分类" description="自动识别电脑上的应用和图标，也支持自定义路径与图片。"><button className="button" onClick={() => void pick()}><Folder size={15}/>自定义路径</button><button className="button primary" disabled={scanning} onClick={() => void scan()}>{scanning ? <LoaderCircle size={15} className="spinning"/> : <Plus size={16}/>}添加应用</button></PageHeader>
+    <div className={`drop-zone ${dragOver ? 'drag-over' : ''}`} onDragOver={e => { e.preventDefault(); setDragOver(true); }} onDragLeave={() => setDragOver(false)} onDrop={e => { e.preventDefault(); setDragOver(false); void run(async () => { setState(await api.importPaths(Array.from(e.dataTransfer.files), group?.id)); }); }}><span className="drop-icon"><FolderPlus size={26}/><Plus size={12}/></span><div><strong>把常用应用，轻轻拖进来。</strong><p>支持桌面快捷方式、程序和文件夹 · 自动提取应用图标</p></div><span className="drop-dashes">DROP HERE ↙</span></div>
+    <div className="app-toolbar"><div className="collection-tabs"><button className={!group ? 'active' : ''} onClick={() => setSelectedGroup(undefined)}><Layers3 size={14}/>全部 Dock<span>{state.config.items.length}</span></button>{groups.map(g => <button key={g.id} className={group?.id === g.id ? 'active' : ''} onClick={() => setSelectedGroup(g.id)}>{g.name}<span>{g.children?.length || 0}</span></button>)}</div><div className="app-search"><Search size={15}/><input aria-label="搜索应用" value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索应用…"/></div></div>
+    <Card className="app-list-card"><div className="card-heading"><div><h2>{group && <button className="back-button" aria-label="返回 Dock" onClick={() => setSelectedGroup(undefined)}><ArrowLeft size={16}/></button>}{group ? group.name : '我的 Dock'}<span className="count-badge">{currentItems.length}</span></h2><p>{group ? '点击 Dock 上的分类图标，即可展开这些应用。' : '拖动调整顺序，或将应用移入分类。'}</p></div><div className="app-add-actions"><button onClick={() => startCreate('url')}><Globe2 size={14}/>网址</button><button onClick={() => void pick(true)}><Folder size={14}/>文件夹</button>{!group && <button onClick={() => startCreate('group')}><FolderPlus size={14}/>新建分类</button>}<button aria-label="添加分隔线" title="添加分隔线" onClick={() => void add({ id: crypto.randomUUID(), name: '分隔线', kind: 'separator', target: '', glyph: 'box', color: '#aaaaaa' })}><Minus size={16}/></button></div></div>
+      <div className="app-list">{visibleItems.map(item => { const index = currentItems.findIndex(i => i.id === item.id); return <div key={item.id} className="app-row" draggable onDragStart={e => e.dataTransfer.setData('application/dock-box-item', item.id)} onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const id = e.dataTransfer.getData('application/dock-box-item'); if (id) reorder(id, index); }}><span className="drag-handle"><GripVertical size={17}/></span>{item.kind === 'separator' ? <span className="separator-tile"><Minus size={20}/></span> : <IconTile item={item} size={41}/>}<button className="app-details" onClick={() => { if (item.kind === 'group') setSelectedGroup(item.id); else { setCreating(false); setEditing(item); } }}><strong>{item.name}{item.kind === 'group' && <span className="kind-tag">分类</span>}</strong><small>{item.kind === 'group' ? `${item.children?.length || 0} 个应用 · 点击管理` : item.kind === 'builtin' ? '系统快捷操作' : item.kind === 'separator' ? '让不同用途的应用保持间隔' : item.target}</small></button>
+        {item.kind !== 'group' && <select aria-label={`移动 ${item.name} 到分类`} value={group?.id || 'root'} onChange={e => move(item.id, e.target.value)}><option value="root">Dock 主栏</option>{groups.map(g => <option value={g.id} key={g.id}>{g.name}</option>)}</select>}
+        <div className="app-row-actions"><button className="icon-button" aria-label={`上移 ${item.name}`} disabled={index === 0} onClick={() => reorder(item.id, index - 1)}><ArrowUp size={14}/></button><button className="icon-button" aria-label={`下移 ${item.name}`} disabled={index === currentItems.length - 1} onClick={() => reorder(item.id, index + 1)}><ArrowDown size={14}/></button><button className="icon-button" aria-label={`编辑 ${item.name}`} onClick={() => { setCreating(false); setEditing(item); }}><Pencil size={14}/></button><button className="icon-button delete-button" aria-label={`移除 ${item.name}`} onClick={() => setRemove(item)}><Trash2 size={14}/></button></div></div>; })}</div>
+      {!visibleItems.length && <div className="empty-state"><AppWindow size={34}/><h3>{search ? '没有匹配的应用' : '留点空间，给你的常用。'}</h3><p>{search ? '试试其他名称。' : '添加应用或拖入快捷方式，开始整理这个空间。'}</p><button className="button" onClick={() => void scan()}><Plus size={14}/>添加应用</button></div>}
+    </Card><div className="inline-tip"><MouseTip/><span>小提示：Dock 上也支持拖动排序。右键图标，可以快速打开管理设置。</span></div>
+    {editing && <ItemEditor item={editing} creating={creating} onClose={() => setEditing(undefined)} onSave={async item => { if (creating) await add(item); else await saveCurrent(currentItems.map(i => i.id === item.id ? item : i)); setEditing(undefined); }}/>}
+    {remove && <div className="modal-backdrop"><section className="modal compact-modal" role="dialog" aria-modal="true" aria-label="确认移除"><span className="eyebrow">KEEP YOUR SPACE SIMPLE</span><h2>移除「{remove.name}」？</h2><p>{remove.kind === 'group' ? '分类及其中的 Dock 快捷入口会一并移除。' : '这个快捷入口会从 Dock 移除。'}电脑上的原始文件会保留。</p><div className="modal-actions"><button className="button" onClick={() => setRemove(undefined)}>取消</button><button className="button danger-button" onClick={() => { void saveCurrent(currentItems.filter(i => i.id !== remove.id)); setRemove(undefined); }}>确认移除</button></div></section></div>}
+    {installed && <div className="modal-backdrop"><section className="modal installed-modal" role="dialog" aria-modal="true" aria-label="已安装应用"><button className="modal-close icon-button" aria-label="关闭应用中心" onClick={() => setInstalled(undefined)}><X size={18}/></button><span className="eyebrow">YOUR APP LIBRARY</span><h2>常用应用，都在这里。</h2><p>从开始菜单、桌面与系统应用库识别 · 添加到 {group?.name || 'Dock 主栏'}</p><div className="installed-search"><Search size={17}/><input aria-label="搜索已安装应用" placeholder="输入应用名称…" value={installedSearch} onChange={e => setInstalledSearch(e.target.value)}/></div><div className="installed-actions"><button className="button" disabled={scanning} onClick={() => void scan(true)}>重新扫描</button><button className="button" onClick={() => { setInstalled(undefined); void pick(); }}>自定义路径</button></div><div className="installed-grid">{scanning && <div className="scan-status"><LoaderCircle className="spinning" size={18}/>正在识别应用与图标…</div>}{installed.filter(i => i.name.toLowerCase().includes(installedSearch.toLowerCase())).map(item => <button key={item.id} disabled={allTargets.has(item.target)} onClick={() => { void add({ ...item, id: crypto.randomUUID() }); toast(`已添加 ${item.name}`); }}><IconTile item={item} size={45}/><strong>{item.name}</strong><span>{allTargets.has(item.target) ? <><Check size={12}/>已添加</> : <><Plus size={12}/>添加</>}</span></button>)}</div>{!installed.length && !scanning && <div className="empty-state"><AppWindow/><p>开始菜单中没有找到应用，<br/>可以手动选择程序或拖入快捷方式。</p></div>}<footer>{installed.length} 个可用应用<span>不收集或上传你的应用信息</span></footer></section></div>}
+  </>;
+}
+function ItemEditor({ item, creating, onClose, onSave }: { item: DockItem; creating: boolean; onClose: () => void; onSave: (item: DockItem) => Promise<void> }) {
+  const { run, toast } = useStore();
+  const [draft, setDraft] = useState(item);
+  const [saving, setSaving] = useState(false);
+  const patch = (p: Partial<DockItem>) => setDraft(current => ({ ...current, ...p }));
+  const save = async () => {
+    if (!draft.name.trim()) { toast('请给它取一个名字。', true); return; }
+    if (draft.kind === 'url') { try { const url = new URL(draft.target); if (!['http:', 'https:'].includes(url.protocol)) throw new Error(); } catch { toast('请输入以 https:// 或 http:// 开头的完整网址。', true); return; } }
+    if (['app','folder'].includes(draft.kind) && !draft.target.trim()) { toast('请选择应用或文件夹路径。', true); return; }
+    setSaving(true); await onSave({ ...draft, name: draft.name.trim() }); setSaving(false);
+  };
+  return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}><form className="modal item-editor" role="dialog" aria-modal="true" aria-label={creating ? '添加快捷入口' : '编辑快捷入口'} onSubmit={e => { e.preventDefault(); void save(); }}><button type="button" className="modal-close icon-button" aria-label="关闭编辑" onClick={onClose}><X size={18}/></button><span className="eyebrow">MAKE ROOM FOR YOUR FAVORITES</span><h2>{creating ? draft.kind === 'group' ? '给常用应用，一个家。' : '加入你的桌面空间。' : '让它更像你的习惯。'}</h2><div className="editor-preview"><IconTile item={draft} size={65}/><div><strong>{draft.name || '新的快捷入口'}</strong><small>{draft.kind === 'group' ? '应用分类' : draft.kind === 'url' ? '收藏网址' : draft.kind === 'folder' ? '文件夹' : 'Dock 快捷入口'}</small></div></div>
+    <label className="form-field">显示名称<input aria-label="显示名称" autoFocus maxLength={80} value={draft.name} onChange={e => patch({ name: e.target.value })} placeholder="取一个顺口的名字"/></label>
+    {['app','url','folder'].includes(draft.kind) && <label className="form-field">{draft.kind === 'url' ? '网址' : '启动路径'}<div className="input-with-action"><input aria-label="启动路径或网址" value={draft.target} onChange={e => patch({ target: e.target.value })} placeholder={draft.kind === 'url' ? 'https://example.com' : '选择程序、快捷方式或文件夹'}/>{draft.kind !== 'url' && <button type="button" onClick={() => void run(async () => { const result = await api.pickApp(draft.kind === 'folder'); if (result) patch({ target: result.target, icon: result.icon, name: draft.name || result.name }); })}>浏览</button>}</div></label>}
+    {draft.kind === 'app' && <><label className="form-field">启动参数<input aria-label="启动参数" value={draft.arguments || ''} onChange={e => patch({ arguments: e.target.value })} placeholder="可选，快捷方式会保留其原有参数"/></label><label className="form-field">工作目录<input aria-label="工作目录" value={draft.workingDirectory || ''} onChange={e => patch({ workingDirectory: e.target.value })} placeholder="可选，默认使用程序所在文件夹"/></label></>}
+    {draft.kind !== 'separator' && <><div className="field-heading"><span>图标样式</span><button type="button" className="text-button" onClick={() => void run(async () => { const icon = await api.pickIcon(); if (icon) patch({ icon }); })}><ImagePlus size={14}/>自定义图片</button></div><div className="glyph-picker">{Object.entries(glyphMap).map(([key, Icon]) => <button key={key} type="button" aria-label={`图标 ${key}`} className={draft.glyph === key && !draft.icon ? 'selected' : ''} onClick={() => patch({ glyph: key as Glyph, icon: undefined })}><Icon size={20}/></button>)}</div><div className="color-picker"><span>图标配色</span>{colors.map(color => <button type="button" aria-label={`配色 ${color}`} key={color} style={{ background: color }} onClick={() => patch({ color })}>{draft.color === color && <Check size={13}/>}</button>)}</div></>}
+    <div className="modal-actions"><button className="button" type="button" onClick={onClose}>取消</button><button className="button primary" type="submit" disabled={saving}>{saving ? '保存中…' : creating ? '添加到我的空间' : '保存修改'}<ArrowUpRight size={15}/></button></div>
+  </form></div>;
+}
+function MouseTip() { return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="6" y="2" width="12" height="20" rx="6"/><path d="M12 2v6"/></svg>; }

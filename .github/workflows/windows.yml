@@ -1,0 +1,34 @@
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run dist:win
+      - run: npm run test:launch
+      - run: npm run test:desktop -- --exe release/win-unpacked/dock_box.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dock_box-windows-x64
+          path: release/*.exe
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-test-results
+          path: artifacts/smoke-packaged
