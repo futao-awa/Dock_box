@@ -16,6 +16,7 @@ export function resolveLaunch(item: DockItem, folders: Record<string, string>, e
       explorer: path.win32.join(environment.SystemRoot || 'C:\\Windows', 'explorer.exe'),
       terminal: path.win32.join(system, 'cmd.exe'), notepad: path.win32.join(system, 'notepad.exe'),
       taskmgr: path.win32.join(system, 'Taskmgr.exe'), recycle: 'shell:RecycleBinFolder', ...folders,
+      computer: 'shell:MyComputerFolder', windowsSettings: 'ms-settings:', controlpanel: path.win32.join(system, 'control.exe'), sound: path.win32.join(system, 'mmsys.cpl'),
     };
     if (!builtins[item.target]) throw new Error('未知的系统快捷操作。');
     return { target: builtins[item.target] };

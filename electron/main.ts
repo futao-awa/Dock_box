@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, screen, shell, dialog, globalShortcut } from 'electron';
-import { existsSync, statSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, statSync, readFileSync, writeFileSync, mkdirSync, copyFileSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -7,7 +7,9 @@ import { ConfigStore } from './store';
 import { NativeBridge } from './native';
 import { resolveLaunch } from './launch';
 import { installNetworkGuard, setFirewall } from './network';
-import { createDefaultConfig, normalizeConfig, normalizeItems, normalizeSettings, findItem, removeItem, dockMetrics, type AppState, type DockItem, type Settings } from '../shared/model';
+import { buildAppLibrary, type AppEntry } from './app-library';
+import { locateBitDock, loadBitDock, countItems } from './bitdock';
+import { createDefaultConfig, normalizeConfig, normalizeItems, normalizeSettings, findItem, removeItem, dockMetrics, type AppState, type DockItem, type Settings, type InstalledApp, type BitDockPreview } from '../shared/model';
 
 // A separate profile makes automated smoke tests independent of the user's desktop setup.
 if (process.env.DOCK_BOX_PROFILE) app.setPath('userData', path.resolve(process.env.DOCK_BOX_PROFILE));
@@ -188,7 +190,7 @@ async function launchItem(id: string) {
   launching++;
   try {
     if (store.config.settings.systemLaunch && bridge.status.available) await bridge.request('launch', target as unknown as Record<string, unknown>);
-    else if (target.url || target.target.startsWith('shell:')) await shell.openExternal(target.target);
+    else if (target.url || target.target.startsWith('shell:') || target.target === 'ms-settings:') await shell.openExternal(target.target);
     else { const error = await shell.openPath(target.target); if (error) throw new Error(error); }
   } finally { launching--; }
 }
@@ -202,40 +204,86 @@ async function itemFromPath(file: string): Promise<DockItem> {
   if (typeof file !== 'string' || !path.isAbsolute(file) || !existsSync(file)) throw new Error('文件不存在。');
   const folder = statSync(file).isDirectory();
   const item: DockItem = { id: randomUUID(), name: path.basename(file, path.extname(file)), kind: folder ? 'folder' : 'app', target: file, glyph: folder ? 'folder' : 'box', color: '#a799df' };
+  if (!folder && bridge.status.available) {
+    try { const entry = (await bridge.request('inspect', { files: [file] })).apps?.[0] as AppEntry | undefined;
+      if (entry) { item.name = entry.name; item.icon = entry.icon || undefined; item.arguments = entry.resolvedArguments || undefined; item.workingDirectory = entry.workingDirectory || undefined; if (/^https?:/i.test(entry.resolvedTarget || '')) { item.kind = 'url'; item.target = entry.resolvedTarget!; } }
+    } catch { }
+  }
+  if (item.icon) return item;
   try { const icon = await app.getFileIcon(file, { size: 'large' }); if (!icon.isEmpty()) item.icon = icon.toDataURL(); } catch { }
   return item;
 }
-let scannedApps: DockItem[] | undefined;
-let scanningApps: Promise<DockItem[]> | undefined;
-async function scanApps(refresh = false): Promise<DockItem[]> {
+let scannedApps: InstalledApp[] | undefined;
+let scanningApps: Promise<InstalledApp[]> | undefined;
+async function scanApps(refresh = false): Promise<InstalledApp[]> {
   if (refresh) scannedApps = undefined;
   if (scannedApps) return scannedApps;
   if (scanningApps) return scanningApps;
   scanningApps = discoverApps().finally(() => { scanningApps = undefined; });
   return scanningApps;
 }
-async function discoverApps(): Promise<DockItem[]> {
+async function discoverApps(): Promise<InstalledApp[]> {
   const roots = [...[process.env.APPDATA, process.env.ProgramData].filter(Boolean).map(p => path.join(p!, 'Microsoft/Windows/Start Menu/Programs')), app.getPath('desktop'), path.join(process.env.PUBLIC || 'C:\\Users\\Public', 'Desktop')];
   const files: string[] = [];
   const walk = async (dir: string, depth: number, maxDepth: number) => {
-    if (depth > maxDepth || files.length > 1000) return;
+    if (depth > maxDepth || files.length >= 1500) return;
     try { for (const entry of await readdir(dir, { withFileTypes: true })) { const file = path.join(dir, entry.name); if (entry.isDirectory() && !entry.isSymbolicLink()) await walk(file, depth + 1, maxDepth); else if (/\.(lnk|url|exe)$/i.test(entry.name) && !/uninstall|卸载/i.test(entry.name)) files.push(file); } } catch { }
   };
-  const systemApps = bridge.status.available ? bridge.request('apps').then(result => result.apps as { name: string; target: string; icon?: string }[]).catch(() => []) : Promise.resolve([]);
   await Promise.all(roots.map((root, index) => walk(root, 0, index < roots.length - 2 ? 6 : 0)));
-  const unique = new Map<string, DockItem>();
-  let cursor = 0;
-  await Promise.all(Array.from({ length: 6 }, async () => {
-    while (cursor < Math.min(files.length, 800)) {
-      const file = files[cursor++];
-      try { const item = await itemFromPath(file); const key = item.name.toLocaleLowerCase(); if (!unique.has(key)) unique.set(key, item); } catch { }
-    }
-  }));
-  for (const entry of await systemApps) {
-    if (!entry.name || /uninstall|卸载/i.test(entry.name) || unique.has(entry.name.toLocaleLowerCase())) continue;
-    unique.set(entry.name.toLocaleLowerCase(), { id: randomUUID(), name: entry.name, kind: 'app', target: entry.target, icon: entry.icon || undefined, glyph: 'box', color: '#658a87' });
+  // Include user-maintained portable apps; never crawl every EXE in arbitrary disk folders.
+  const existing = store.config.items.flatMap(item => [item, ...(item.children || [])]).filter(item => item.kind === 'app' && existsSync(item.target)).map(item => item.target);
+  let entries: AppEntry[] = [];
+  if (bridge.status.available) {
+    entries = (await bridge.request('apps', { files: [...new Set([...files, ...existing])].slice(0, 1600) })).apps || [];
+  } else {
+    throw new Error('Windows 应用识别服务尚未连接，请稍后重新扫描；也可以使用自定义路径。');
   }
-  scannedApps = [...unique.values()].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN')); return scannedApps;
+  for (const entry of entries) if (entry.source === 'shortcut') entry.source = roots.slice(0, 2).some(root => entry.target.toLowerCase().startsWith(root.toLowerCase())) ? '开始菜单' : existing.includes(entry.target) ? '已有 Dock' : '桌面';
+  scannedApps = buildAppLibrary(entries); return scannedApps;
+}
+let bitDockDraft: BitDockPreview | undefined;
+async function previewBitDock(choose?: 'file' | 'folder'): Promise<BitDockPreview | null> {
+  let selection: string | undefined;
+  if (choose) {
+    const result = await dialog.showOpenDialog(managerWindow || settingsWindow || dockWindow!, { title: choose === 'folder' ? '选择 BitDock 数据目录（包含 Data 文件夹）' : '选择 BitDock.xml', properties: choose === 'folder' ? ['openDirectory'] : ['openFile'], filters: choose === 'file' ? [{ name: 'BitDock 配置', extensions: ['xml'] }] : undefined });
+    if (result.canceled) return null;
+    selection = result.filePaths[0];
+  }
+  const file = locateBitDock(selection, app.getPath('documents'));
+  if (!file) throw new Error('未找到 BitDock 数据。请选择包含 Data 文件夹的数据目录，或 Data/BitDock.xml。');
+  const data = await loadBitDock(file);
+  const all = data.items.flatMap(item => [item, ...(item.children || [])]);
+  const fallback = all.filter(item => item.kind === 'app' && existsSync(item.target));
+  let inspected: AppEntry[] = [];
+  if (bridge.status.available && fallback.length) inspected = (await bridge.request('inspect', { files: fallback.map(item => item.target) })).apps || [];
+  for (const item of all) {
+    const file = data.icons.get(item.id);
+    if (file) { try { const image = nativeImage.createFromPath(file); if (!image.isEmpty()) item.icon = image.resize({ width: 128, height: 128 }).toDataURL(); } catch { } }
+    if (!item.icon) item.icon = inspected.find(entry => entry.target === item.target)?.icon || undefined;
+  }
+  bitDockDraft = { token: randomUUID(), source: data.source, items: data.items, warnings: data.warnings, appearance: data.appearance, itemCount: countItems(data.items), groupCount: data.items.filter(item => item.kind === 'group').length, iconCount: all.filter(item => item.icon).length };
+  return bitDockDraft;
+}
+function applyBitDock(token: string, mode: 'append' | 'replace', appearance: boolean) {
+  if (!bitDockDraft || token !== bitDockDraft.token || !['append', 'replace'].includes(mode)) throw new Error('导入预览已失效，请重新读取 BitDock 数据。');
+  const draft = bitDockDraft, imported = structuredClone(draft.items);
+  const ids = new Set(store.config.items.map(item => item.id));
+  const items = mode === 'replace' ? imported : [...store.config.items, ...imported.filter(item => !ids.has(item.id))];
+  if (!draft.itemCount) throw new Error('没有可导入的 BitDock 项目。');
+  if (countItems(normalizeItems(items)) !== countItems(items)) throw new Error('导入后超过 Dock 容量（主栏 / 每分类 60 项，总计 120 项）。请先精简入口，或选择替换主栏。');
+  const backupDir = path.join(app.getPath('userData'), 'backups'); mkdirSync(backupDir, { recursive: true });
+  const backup = path.join(backupDir, `before-bitdock-${Date.now()}.json`);
+  writeFileSync(backup, JSON.stringify(store.config, null, 2), 'utf8');
+  for (const item of imported.flatMap(item => [item, ...(item.children || [])])) {
+    if (item.kind === 'app' && /\.lnk$/i.test(item.target) && existsSync(item.target)) {
+      const directory = path.join(app.getPath('userData'), 'imported-shortcuts'); mkdirSync(directory, { recursive: true });
+      const copied = path.join(directory, `${item.id}.lnk`); copyFileSync(item.target, copied); item.target = copied;
+    }
+  }
+  const settings = appearance ? normalizeSettings({ ...store.config.settings, ...draft.appearance }) : store.config.settings;
+  store.save({ ...store.config, settings, items });
+  bitDockDraft = undefined; scannedApps = undefined; closeGroup(); layoutDock(); broadcast();
+  return { state: state(), backup };
 }
 function closeGroup() { activeGroupId = undefined; groupWindow?.hide(); lastInside = Date.now(); }
 function openManager(page = 'apps', id?: string) {
@@ -316,6 +364,8 @@ function registerIpc() {
     store.save({ ...store.config, items }); layoutDock(); broadcast(); return state();
   });
   handle('apps:scan', scanApps);
+  handle('bitdock:preview', previewBitDock);
+  handle('bitdock:apply', applyBitDock);
   handle('config:export', async () => { const result = await dialog.showSaveDialog(settingsWindow!, { title: '导出配置', defaultPath: 'dock_box-config.json', filters: [{ name: 'Dock Box 配置', extensions: ['json'] }] }); if (result.canceled || !result.filePath) return false; writeFileSync(result.filePath, JSON.stringify(store.config, null, 2), 'utf8'); return true; });
   handle('config:import', async () => {
     const result = await dialog.showOpenDialog(settingsWindow!, { title: '导入配置', properties: ['openFile'], filters: [{ name: 'Dock Box 配置', extensions: ['json'] }] });

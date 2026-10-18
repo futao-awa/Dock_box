@@ -31,11 +31,15 @@ U 盘入口由设备状态生成，不写入应用列表；拔出或关闭检测
 
 ## 应用识别与启动
 
-应用扫描异步读取开始菜单和桌面快捷方式，并合并 `shell:AppsFolder`。本机文件使用 Electron 提取图标，系统应用通过 Shell 图像接口读取。扫描结果缓存，可在应用库重新扫描。
+应用扫描异步读取开始菜单和桌面快捷方式，并把路径交给 C# STA worker 解析真实目标、快捷方式参数、工作目录和 Shell 图标；同时合并 `shell:AppsFolder`、App Paths 和已安装程序登记信息。应用库按真实目标与参数去重，再分为常用应用、系统工具、网页和全部入口；帮助页、卸载程序、失效入口不会混入默认常用视图。扫描结果缓存，可在应用库重新扫描。
 
 `electron/launch.ts` 校验目标：网址仅允许 HTTP / HTTPS；文件路径支持环境变量、中文和空格；系统工具使用 Windows 系统目录；商店应用使用 AppsFolder 标识。
 
 默认启动路径是 C# `ProcessStartInfo.UseShellExecute`，交由 Windows 处理 `.lnk`、程序、文件夹和网址。原生输入输出显式使用 UTF-8，快捷方式本身的参数与工作目录由 Windows 保留。原生组件不可用或关闭系统接口启动时，主进程使用 Electron Shell 回退。
+
+BitDock 迁移只读取用户主动选择或自动定位到的 `Data/BitDock.xml`、`ico*.xml` 和 `config.ini`。XML 禁止 DTD / 外部实体，解析后限制层级和项目数量；`MENU` 变为分类，`ICON` / `FOLDER` / 系统入口映射为 Dock 项目，本地自定义图标转为 data URL。导入预览带有令牌，确认时写入当前配置备份，并可追加或替换；U 盘和 BitDock 专属动态菜单会说明后跳过。
+
+Dock 波浪由 `shared/wave.ts` 计算连续布局：每个图标按鼠标距离获得缩放，相邻项目通过 flex 宽度让位，分隔线保留固定宽度；布局根据窗口剩余空间限长，离开 Dock 后通过 requestAnimationFrame 平滑复位。主进程的 Dock 窗口预留最大波峰尺寸，避免放大时被窗口边界裁切。
 
 ## Windows 集成与恢复
 

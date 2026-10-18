@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('dockBox', {
   pickIcon: () => ipcRenderer.invoke('icon:pick'),
   importPaths: (files: File[], groupId?: string) => ipcRenderer.invoke('items:importPaths', files.map(file => webUtils.getPathForFile(file)), groupId),
   scanApps: (refresh = false) => ipcRenderer.invoke('apps:scan', refresh),
+  previewBitDock: (choose?: 'file' | 'folder') => ipcRenderer.invoke('bitdock:preview', choose),
+  applyBitDock: (token: string, mode: 'append' | 'replace', appearance: boolean) => ipcRenderer.invoke('bitdock:apply', token, mode, appearance),
   importConfig: () => ipcRenderer.invoke('config:import'),
   exportConfig: () => ipcRenderer.invoke('config:export'),
   resetConfig: () => ipcRenderer.invoke('config:reset'),

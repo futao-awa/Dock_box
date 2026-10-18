@@ -1,3 +1,4 @@
+import { waveReserve } from './wave';
 export type DockPosition = 'bottom' | 'top' | 'left' | 'right';
 export type Theme = 'glass' | 'cloud' | 'midnight' | 'rose';
 export type Glyph = 'folder' | 'browser' | 'code' | 'music' | 'image' | 'terminal' | 'settings' | 'trash' | 'game' | 'chat' | 'box' | 'files' | 'globe' | 'plus';
@@ -19,6 +20,12 @@ export interface Settings {
   iconReflection: boolean; startupAnimation: boolean;
 }
 export interface Config { version: 1; settings: Settings; items: DockItem[] }
+export type AppCategory = 'application' | 'system' | 'website' | 'utility' | 'unavailable';
+export interface InstalledApp extends DockItem { category: AppCategory; source: string; detail: string }
+export interface BitDockPreview {
+  token: string; source: string; items: DockItem[]; itemCount: number; groupCount: number; iconCount: number;
+  warnings: string[]; appearance: Partial<Settings>;
+}
 export interface DisplayInfo { id: string; name: string; primary: boolean; width: number; height: number }
 export interface NativeStatus { available: boolean; message: string; desktopHidden: boolean; taskbarSupported: boolean }
 export interface UsbDrive { path: string; name: string; ready: boolean }
@@ -125,9 +132,9 @@ export function dockMetrics(settings: Settings, itemCount: number, displayWidth:
   const vertical = settings.position === 'left' || settings.position === 'right';
   const available = Math.max(120, (vertical ? displayHeight : displayWidth) - 32);
   const desiredSize = settings.iconSize * settings.zoom / 100;
-  const fit = Math.min(1, (available - 72) / Math.max(1, itemCount * (desiredSize + settings.gap)));
+  const fit = Math.min(1, (available - 64) / Math.max(1, itemCount * (desiredSize + settings.gap) + waveReserve(desiredSize, itemCount, settings)));
   const size = Math.max(16, desiredSize * fit);
   const gap = settings.gap * fit;
-  const length = Math.min(available, Math.ceil(itemCount * (size + gap) + 64));
+  const length = Math.min(available, Math.ceil(itemCount * (size + gap) + waveReserve(size, itemCount, settings) + 64));
   return { vertical, size, gap, length, thickness: Math.ceil(size * settings.magnification + 80) };
 }

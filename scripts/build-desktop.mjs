@@ -11,5 +11,5 @@ if (process.platform === 'win32') {
   const compiler = path.join(framework, 'csc.exe');
   if (!existsSync(compiler)) throw new Error('Windows .NET Framework 4.x compiler is required.');
   mkdirSync('resources/native', { recursive: true });
-  execFileSync(compiler, ['/nologo', '/utf8output', '/target:exe', '/optimize+', '/platform:anycpu', `/out:${path.resolve('resources/native/DockBox.Native.exe')}`, '/reference:System.Windows.Forms.dll', '/reference:System.Drawing.dll', '/reference:System.Web.Extensions.dll', path.resolve('native/DockBox.Native.cs')], { stdio: 'inherit', windowsHide: true });
+  execFileSync(compiler, ['/nologo', '/utf8output', '/target:exe', '/optimize+', '/platform:anycpu', `/out:${path.resolve('resources/native/DockBox.Native.exe')}`, '/reference:System.Windows.Forms.dll', '/reference:System.Drawing.dll', '/reference:System.Web.Extensions.dll', path.resolve('native/DockBox.Native.cs'), path.resolve('native/AppDiscovery.cs')], { stdio: 'inherit', windowsHide: true });
 }

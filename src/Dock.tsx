@@ -1,15 +1,16 @@
-import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { ArrowUpRight, ChevronDown, Plus, X } from 'lucide-react';
-import { magnify, findItem, type DockItem } from '../shared/model';
+import { findItem, type DockItem } from '../shared/model';
 import { useStore } from './store';
 import { api } from './api';
 import { IconTile } from './components';
+import { useDockWave } from './useDockWave';
+import { waveReserve } from '../shared/wave';
 
 export function DockStrip({ preview = false, compact = false }: { preview?: boolean; compact?: boolean }) {
   const { state, run, items: saveItems } = useStore();
   const s = state.config.settings;
   const strip = useRef<HTMLDivElement>(null);
-  const [pointer, setPointer] = useState<number | null>(null);
   const [bouncing, setBouncing] = useState('');
   const [previewGroup, setPreviewGroup] = useState<DockItem>();
   const [dragged, setDragged] = useState<string>();
@@ -17,9 +18,11 @@ export function DockStrip({ preview = false, compact = false }: { preview?: bool
   const displayItems: DockItem[] = [...state.config.items, ...(s.detectUsb ? (state.usbDrives || []).filter(drive => drive.ready).map(drive => ({ id: `usb-${drive.path[0]}`, name: drive.name, kind: 'folder' as const, target: drive.path, glyph: 'files' as const, color: '#658a87' })) : [])];
   const count = displayItems.length;
   const available = preview ? (compact ? 630 : vertical ? 155 : 720) : (vertical ? window.innerHeight : window.innerWidth) - 64;
-  const fit = Math.min(1, available / Math.max(1, count * (s.iconSize * s.zoom / 100 + s.gap)));
+  const fit = Math.min(1, available / Math.max(1, count * (s.iconSize * s.zoom / 100 + s.gap) + waveReserve(s.iconSize * s.zoom / 100, count, s)));
   const size = Math.max(preview ? 14 : 16, s.iconSize * s.zoom / 100 * fit * (compact ? .88 : 1));
   const gap = s.gap * fit;
+  const maxLength = preview ? available - 32 : (vertical ? window.innerHeight : window.innerWidth) - 48;
+  useDockWave(strip, size, gap, vertical, s, displayItems.map(item => item.id).join(','), maxLength);
   useEffect(() => {
     if (preview || !strip.current) return;
     const update = () => {
@@ -51,47 +54,14 @@ export function DockStrip({ preview = false, compact = false }: { preview?: bool
     if (from >= 0 && to >= 0) { const [item] = next.splice(from, 1); next.splice(to, 0, item); void saveItems(next); }
     setDragged(undefined);
   };
-  const dockStyle = { '--dock-alpha': s.opacity / 100, '--dock-radius': `${s.radius}px`, '--icon-size': `${size}px`, '--dock-gap': `${gap}px`, '--label-size': `${s.fontSize}px`, fontFamily: s.fontFamily } as CSSProperties;
-  const movePointer = (event: MouseEvent<HTMLDivElement>) => {
-    const element = strip.current;
-    if (!element) return;
-    const coordinate = vertical ? event.clientY : event.clientX;
-    const centers = Array.from(element.children)
-      .filter((child): child is HTMLElement => child instanceof HTMLElement && child.classList.contains('dock-item'))
-      .map(child => {
-        const rect = child.getBoundingClientRect();
-        return vertical ? rect.top + rect.height / 2 : rect.left + rect.width / 2;
-      });
-    if (!centers.length) { setPointer(null); return; }
-    if (centers.length === 1) { setPointer(0); return; }
-    if (coordinate <= centers[0]) {
-      setPointer((coordinate - centers[0]) / (centers[1] - centers[0]));
-      return;
-    }
-    for (let index = 0; index < centers.length - 1; index++) {
-      if (coordinate <= centers[index + 1]) {
-        const span = centers[index + 1] - centers[index];
-        setPointer(index + (span ? (coordinate - centers[index]) / span : 0));
-        return;
-      }
-    }
-    const last = centers.length - 1;
-    setPointer(last + (coordinate - centers[last]) / (centers[last] - centers[last - 1]));
-  };
-  let iconIndex = 0;
+  const dockStyle = { '--dock-alpha': s.opacity / 100, '--dock-radius': `${s.radius}px`, '--icon-size': `${size}px`, '--dock-direction': compact || s.position === 'bottom' || s.position === 'right' ? -1 : 1, '--dock-gap': `${gap}px`, '--label-size': `${s.fontSize}px`, fontFamily: s.fontFamily } as CSSProperties;
   return <div className={`dock-composition ${vertical ? 'vertical' : ''} ${s.iconReflection ? 'with-reflection' : ''} ${s.reduceMotion ? 'reduce-motion' : ''}`} style={dockStyle}>
     {previewGroup && <div className="preview-group"><div><strong>{previewGroup.name}</strong><button aria-label="收起分类" onClick={() => setPreviewGroup(undefined)}><X size={14}/></button></div><section>{previewGroup.children?.map(child => <span key={child.id}><IconTile item={child} size={31}/><small>{child.name}</small></span>)}</section></div>}
-    <div ref={strip} className={`dock-strip theme-${s.theme} ${vertical ? 'vertical' : ''}`} onContextMenu={e => { if (!preview) { e.preventDefault(); e.stopPropagation(); void api.contextMenu(); } }} onDragOver={e => e.preventDefault()} onDrop={e => drop(e)} onMouseLeave={() => setPointer(null)} onMouseMove={movePointer}>
+    <div ref={strip} className={`dock-strip theme-${s.theme} ${vertical ? 'vertical' : ''}`} onContextMenu={e => { if (!preview) { e.preventDefault(); e.stopPropagation(); void api.contextMenu(); } }} onDragOver={e => e.preventDefault()} onDrop={e => drop(e)}>
       {displayItems.map((item, index) => {
-        if (item.kind === 'separator') return <span key={item.id} className="dock-separator" style={{ width: vertical ? size : size / 3, height: vertical ? size / 3 : size * .55 }} onDragOver={e => e.preventDefault()} onDrop={e => { e.stopPropagation(); drop(e, item.id); }}/>;
-        // Centers are measured from the actual elements because separators have a different width.
-        const currentIconIndex = iconIndex++;
-        const distance = pointer === null ? 100 : pointer - currentIconIndex;
-        const scale = magnify(distance, s);
-        const lift = (scale - 1) * size * .36;
-        const translation = compact || s.position === 'bottom' ? `translateY(${-lift}px)` : s.position === 'top' ? `translateY(${lift}px)` : s.position === 'left' ? `translateX(${lift}px)` : `translateX(${-lift}px)`;
-        return <button key={item.id} className={`dock-item ${dragged === item.id ? 'dragging' : ''}`} aria-label={item.name} draggable={!preview && !item.id.startsWith('usb-')} onDragStart={e => { e.dataTransfer.setData('application/dock-box-item', item.id); setDragged(item.id); }} onDragEnd={() => setDragged(undefined)} onDrop={e => { e.stopPropagation(); drop(e, item.id); }} onClick={e => activate(item, e.currentTarget)} onContextMenu={e => { if (!preview) { e.preventDefault(); e.stopPropagation(); void api.contextMenu(item.id); } }} style={{ '--item-scale': scale, transform: `${translation} scale(${scale})`, zIndex: Math.round(scale * 10), width: size, height: size } as CSSProperties}>
-          <span className={bouncing === item.id ? `click-${s.clickEffect}` : ''}><IconTile item={item} size={size}/></span>
+        if (item.kind === 'separator') return <span key={item.id} className="dock-separator" data-base-width={size / 3} style={{ width: vertical ? size : size / 3, height: vertical ? size / 3 : size * .55 }} onDragOver={e => e.preventDefault()} onDrop={e => { e.stopPropagation(); drop(e, item.id); }}/>;
+        return <button key={item.id} data-base-width={size} className={`dock-item ${dragged === item.id ? 'dragging' : ''}`} aria-label={item.name} draggable={!preview && !item.id.startsWith('usb-')} onDragStart={e => { e.dataTransfer.setData('application/dock-box-item', item.id); setDragged(item.id); }} onDragEnd={() => setDragged(undefined)} onDrop={e => { e.stopPropagation(); drop(e, item.id); }} onClick={e => activate(item, e.currentTarget)} onContextMenu={e => { if (!preview) { e.preventDefault(); e.stopPropagation(); void api.contextMenu(item.id); } }} style={{ width: vertical ? size : 'calc(var(--icon-size) * var(--item-scale, 1))', height: vertical ? 'calc(var(--icon-size) * var(--item-scale, 1))' : size } as CSSProperties}>
+          <span className="dock-art"><span className={bouncing === item.id ? `click-${s.clickEffect}` : ''}><IconTile item={item} size={size}/></span></span>
           {s.showLabels && <span className={`dock-label label-${compact ? 'bottom' : s.position}`}>{item.name}</span>}
           {item.kind === 'group' && <span className="dock-group-indicator"/>}
         </button>;

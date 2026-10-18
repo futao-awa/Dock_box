@@ -8,7 +8,6 @@ using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using System.Diagnostics;
 using System.IO;
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -76,7 +75,7 @@ internal static class Program
         try {
             string line;
             while ((line = Console.ReadLine()) != null) {
-                if (line.Length > 65536) continue;
+                if (line.Length > 2 * 1024 * 1024) continue;
                 string command = line;
                 dispatcher.BeginInvoke(new Action(delegate { Process(command); }));
             }
@@ -114,9 +113,11 @@ internal static class Program
                 if (message.ContainsKey("workingDirectory")) start.WorkingDirectory = Convert.ToString(message["workingDirectory"]);
                 // ShellExecute opens .lnk, URLs, AppsFolder entries and console windows through Windows.
                 System.Diagnostics.Process.Start(start);
-            } else if (command == "apps") {
+            } else if (command == "apps" || command == "inspect") {
                 var requestId = id;
-                Thread worker = new Thread(delegate() { try { Write(new { id = requestId, ok = true, apps = DiscoverApps() }); } catch (Exception error) { Write(new { id = requestId, ok = false, error = error.Message }); } });
+                var files = new List<string>();
+                if (message.ContainsKey("files")) foreach (object file in (System.Collections.IEnumerable)message["files"]) { if (files.Count >= 1600) break; files.Add(Convert.ToString(file)); }
+                Thread worker = new Thread(delegate() { try { Write(new { id = requestId, ok = true, apps = command == "apps" ? AppDiscovery.Discover(files.ToArray()) : AppDiscovery.Inspect(files.ToArray()) }); } catch (Exception error) { Write(new { id = requestId, ok = false, error = error.Message }); } });
                 worker.IsBackground = true; worker.SetApartmentState(ApartmentState.STA); worker.Start(); return;
             }
             else if (command == "restore") Restore();
@@ -140,31 +141,6 @@ internal static class Program
         }
         if (signature == usbSignature) return; usbSignature = signature;
         Write(new { eventName = "usbDrives", drives = drives });
-    }
-
-    static object Member(object instance, string name, BindingFlags flags, params object[] values) { return instance.GetType().InvokeMember(name, flags, null, instance, values); }
-    static List<object> DiscoverApps()
-    {
-        var apps = new List<object>(); object shell = null, folder = null, items = null;
-        try {
-            shell = Activator.CreateInstance(Type.GetTypeFromProgID("Shell.Application"));
-            folder = Member(shell, "NameSpace", BindingFlags.InvokeMethod, "shell:AppsFolder");
-            items = Member(folder, "Items", BindingFlags.InvokeMethod);
-            int count = Math.Min(600, Convert.ToInt32(Member(items, "Count", BindingFlags.GetProperty)));
-            for (int i = 0; i < count; i++) {
-                object item = null;
-                try { item = Member(items, "Item", BindingFlags.InvokeMethod, i);
-                    string name = Convert.ToString(Member(item, "Name", BindingFlags.GetProperty));
-                    string target = Convert.ToString(Member(item, "Path", BindingFlags.GetProperty));
-                    if (String.IsNullOrEmpty(name) || String.IsNullOrEmpty(target)) continue;
-                    if (!Path.IsPathRooted(target)) target = "shell:AppsFolder\\" + target;
-                    apps.Add(new { name = name, target = target, icon = Native.ShellIcon(target) });
-                } catch { } finally { if (item != null && Marshal.IsComObject(item)) Marshal.ReleaseComObject(item); }
-            }
-        } finally {
-            foreach (object value in new object[] { items, folder, shell }) if (value != null && Marshal.IsComObject(value)) Marshal.ReleaseComObject(value);
-        }
-        return apps;
     }
 
     static int Firewall(string[] args)
@@ -327,21 +303,6 @@ internal static class Program
 
 internal static class Native
 {
-    [StructLayout(LayoutKind.Sequential)] public struct Size { public int Width, Height; }
-    [ComImport, Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    interface IShellItemImageFactory { [PreserveSig] int GetImage(Size size, uint flags, out IntPtr bitmap); }
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = true)] static extern int SHCreateItemFromParsingName(string path, IntPtr context, ref Guid iid, out IShellItemImageFactory item);
-    [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr handle);
-    public static string ShellIcon(string target)
-    {
-        IShellItemImageFactory factory = null; IntPtr bitmap = IntPtr.Zero;
-        try {
-            Guid iid = typeof(IShellItemImageFactory).GUID;
-            if (SHCreateItemFromParsingName(target, IntPtr.Zero, ref iid, out factory) != 0) return null;
-            if (factory.GetImage(new Size { Width = 48, Height = 48 }, 0x4, out bitmap) != 0) return null;
-            using (var image = Image.FromHbitmap(bitmap)) using (var buffer = new MemoryStream()) { image.Save(buffer, System.Drawing.Imaging.ImageFormat.Png); return "data:image/png;base64," + Convert.ToBase64String(buffer.ToArray()); }
-        } catch { return null; } finally { if (bitmap != IntPtr.Zero) DeleteObject(bitmap); if (factory != null) Marshal.ReleaseComObject(factory); }
-    }
     public delegate bool EnumProc(IntPtr window, IntPtr param);
     public delegate IntPtr HookProc(int code, IntPtr wParam, IntPtr lParam);
     [StructLayout(LayoutKind.Sequential)] public struct Point { public int x; public int y; }

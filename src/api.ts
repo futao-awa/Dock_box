@@ -1,4 +1,4 @@
-import { createDefaultConfig, normalizeConfig, type AppState, type DockItem, type Settings } from '../shared/model';
+import { createDefaultConfig, normalizeConfig, type AppState, type DockItem, type Settings, type InstalledApp, type BitDockPreview } from '../shared/model';
 
 export interface DockApi {
   getState(): Promise<AppState>;
@@ -10,7 +10,9 @@ export interface DockApi {
   pickApp(folder?: boolean): Promise<DockItem | null>;
   pickIcon(): Promise<string | null>;
   importPaths(files: File[], groupId?: string): Promise<AppState>;
-  scanApps(refresh?: boolean): Promise<DockItem[]>;
+  scanApps(refresh?: boolean): Promise<InstalledApp[]>;
+  previewBitDock(choose?: 'file' | 'folder'): Promise<BitDockPreview | null>;
+  applyBitDock(token: string, mode: 'append' | 'replace', appearance: boolean): Promise<{ state: AppState; backup: string }>;
   importConfig(): Promise<AppState | null>;
   exportConfig(): Promise<boolean>;
   resetConfig(): Promise<AppState | null>;
@@ -40,6 +42,7 @@ const previewApi: DockApi = {
   updateItems: async items => { const s = previewState(); s.config = normalizeConfig({ ...s.config, items }); return savePreview(s); },
   launch: unavailable, openGroup: unavailable, closeGroup: async () => {}, pickApp: unavailable, pickIcon: unavailable,
   importPaths: unavailable, scanApps: unavailable, importConfig: unavailable, exportConfig: unavailable,
+  previewBitDock: unavailable, applyBitDock: unavailable,
   resetConfig: async () => { const s = previewState(); s.config = createDefaultConfig(); return savePreview(s); },
   restoreDesktop: unavailable, openSettings: async page => { location.hash = `/settings/${page || ''}`; }, openManager: async (page, id) => { location.hash = `/manage/${page || 'apps'}/${id || ''}`; location.reload(); }, refreshDock: async () => {}, onDockVisibility: () => () => {}, windowAction: unavailable, contextMenu: async () => {},
   setHitRegion: () => {}, openRepo: async () => { window.open('https://github.com/futao-awa/Dock_box', '_blank', 'noopener,noreferrer'); }, onState: () => () => {}, onPage: () => () => {},

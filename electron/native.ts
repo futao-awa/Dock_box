@@ -40,7 +40,7 @@ export class NativeBridge extends EventEmitter {
     if (!this.process || !this.status.available) throw new Error(this.status.message);
     const id = ++this.sequence;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('Windows 桌面操作超时')); }, command === 'apps' ? 45000 : 10000);
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('Windows 桌面操作超时')); }, command === 'apps' || command === 'inspect' ? 90000 : 10000);
       this.pending.set(id, { resolve, reject, timer });
       this.process!.stdin.write(JSON.stringify({ ...data, id, command }) + '\n', error => { if (error) { clearTimeout(timer); this.pending.delete(id); reject(error); } });
     });
